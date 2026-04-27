@@ -1,4 +1,6 @@
 
 node_modules
 .env.local
+.nextnode_modules
 .next
+.env.local
