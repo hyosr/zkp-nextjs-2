@@ -3,23 +3,22 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button, Input, Alert, Card } from '@/components/ui';
-import { relayLogin, makeExtensionConnectUrl } from '@/lib/api';
+import { relayLogin, makeExtensionConnectUrl, API_BASE } from '@/lib/api';
 
 export default function RecipientPage() {
   const router = useRouter();
   const [shareToken, setShareToken] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [handoffUrl, setHandoffUrl] = useState<string | null>(null);
+
+  const [handoffApiUrl, setHandoffApiUrl] = useState<string | null>(null);
+  const [connectUrl, setConnectUrl] = useState<string | null>(null);
   const [serviceUrl, setServiceUrl] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'direct' | 'keycloak'>('direct');
 
-  // ✅ Authentication guard
   useEffect(() => {
     const token = localStorage.getItem('jwt_token') || localStorage.getItem('zkp_token');
-    if (!token) {
-      router.push('/');
-    }
+    if (!token) router.push('/');
   }, [router]);
 
   const handleRelayLogin = async () => {
@@ -29,13 +28,16 @@ export default function RecipientPage() {
     }
     setLoading(true);
     setError(null);
-    setHandoffUrl(null);
+    setHandoffApiUrl(null);
+    setConnectUrl(null);
+
     try {
       const result = await relayLogin(shareToken);
+
       if (result.handoff?.session_id) {
-        const handoffApiUrl = `${process.env.NEXT_PUBLIC_API_URL}/sharing/handoff/${result.handoff.session_id}`;
-        const connectUrl = makeExtensionConnectUrl(handoffApiUrl);
-        setHandoffUrl(connectUrl);
+        const handoff = `${API_BASE}/sharing/handoff/${result.handoff.session_id}`;
+        setHandoffApiUrl(handoff);
+        setConnectUrl(makeExtensionConnectUrl(handoff));
         setServiceUrl(result.service_url);
       } else {
         setError('Relay login failed: no handoff session created');
@@ -47,9 +49,87 @@ export default function RecipientPage() {
     }
   };
 
-  const handleKeycloakFlow = async () => {
-    setError('Keycloak flow not yet implemented');
+  // ✅ new: open handler with fallback
+  // const handleOpenConnectedProfile = async () => {
+  //   if (!connectUrl || !handoffApiUrl) return;
+
+  //   // Try opening the extension connect endpoint
+  //   const w = window.open(connectUrl, '_blank', 'noopener,noreferrer');
+
+  //   // If popup blocked, fallback to same-tab
+  //   if (!w) {
+  //     window.location.href = connectUrl;
+  //     return;
+  //   }
+
+  //   // Optional: if /extension/connect is missing, the tab may show 404.
+  //   // We can proactively test it quickly:
+  //   try {
+  //     const res = await fetch(connectUrl, { method: 'GET' });
+  //     if (res.status === 404) {
+  //       // fallback: open the raw handoff session endpoint
+  //       window.open(handoffApiUrl, '_blank', 'noopener,noreferrer');
+  //     }
+  //   } catch {
+  //     // network/CORS error: still provide fallback
+  //     window.open(handoffApiUrl, '_blank', 'noopener,noreferrer');
+  //   }
+  // };
+
+
+
+
+
+  const handleOpenConnectedProfile = async () => {
+    if (!connectUrl || !handoffApiUrl) return;
+
+    // Tentative d’ouverture dans un nouvel onglet
+    const newTab = window.open(connectUrl, '_blank', 'noopener,noreferrer');
+
+    // Si le navigateur bloque la popup, on ne redirige PAS la page courante
+    if (!newTab) {
+      setError(
+        'Popup blocked. Please allow popups for this site or click the link below to open the profile manually.'
+      );
+      // Option : proposer un lien cliquable
+      return;
+    }
+
+    // Vérification optionnelle : si l’extension est absente, on peut ouvrir la session brute
+    try {
+      // On attend un peu pour laisser la page s’ouvrir, puis on teste silencieusement
+      setTimeout(async () => {
+        const res = await fetch(connectUrl, { method: 'GET' }).catch(() => null);
+        if (res?.status === 404) {
+        // Fallback silencieux : ouverture de la session handoff dans un autre onglet
+          window.open(handoffApiUrl, '_blank', 'noopener,noreferrer');
+        }
+      }, 1000);
+    } catch {
+      // Ignorer les erreurs cross‑origin
+    }
   };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  const handleKeycloakFlow = async () => setError('Keycloak flow not yet implemented');
 
   return (
     <div className="min-h-screen bg-void bg-grid flex items-center justify-center p-4">
@@ -60,13 +140,13 @@ export default function RecipientPage() {
         <div className="flex border-b border-border mb-4">
           <button
             className={`flex-1 py-2 text-sm font-mono ${activeTab === 'direct' ? 'text-accent border-b-2 border-accent' : 'text-muted'}`}
-            onClick={() => { setActiveTab('direct'); setError(null); setHandoffUrl(null); }}
+            onClick={() => { setActiveTab('direct'); setError(null); setHandoffApiUrl(null); setConnectUrl(null); }}
           >
             Direct Handoff
           </button>
           <button
             className={`flex-1 py-2 text-sm font-mono ${activeTab === 'keycloak' ? 'text-accent border-b-2 border-accent' : 'text-muted'}`}
-            onClick={() => { setActiveTab('keycloak'); setError(null); setHandoffUrl(null); }}
+            onClick={() => { setActiveTab('keycloak'); setError(null); setHandoffApiUrl(null); setConnectUrl(null); }}
           >
             Keycloak Flow
           </button>
@@ -84,21 +164,28 @@ export default function RecipientPage() {
             <Button onClick={handleRelayLogin} loading={loading} variant="primary" className="w-full">
               Login via Relay
             </Button>
+
             {error && <Alert type="error">{error}</Alert>}
-            {handoffUrl && (
+
+            {connectUrl && (
               <Card className="mt-4 p-3 border-accent/30 bg-accent/5">
                 <p className="text-sm font-mono text-accent mb-2">Handoff session ready</p>
                 <p className="text-xs text-muted mb-1">Service: {serviceUrl}</p>
-                <a
-                  href={handoffUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-block w-full text-center bg-accent/10 hover:bg-accent/20 border border-accent/30 rounded-md py-2 text-sm font-mono transition-colors"
-                >
+
+                {/* ✅ button instead of <a> so we control behaviour */}
+                <Button variant="secondary" className="w-full" onClick={handleOpenConnectedProfile}>
                   🔓 Open connected profile
-                </a>
+                </Button>
+
+                <div className="mt-2 text-xs text-muted font-mono break-all">
+                  connect: {connectUrl}
+                </div>
+                <div className="mt-1 text-xs text-muted font-mono break-all">
+                  handoff: {handoffApiUrl}
+                </div>
+
                 <p className="text-xs text-muted mt-2">
-                  Requires the ZKP extension (installed and enabled).
+                  Requires the ZKP extension (installed and enabled). If connect endpoint is missing, fallback opens handoff URL.
                 </p>
               </Card>
             )}
@@ -121,6 +208,148 @@ export default function RecipientPage() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// 'use client';
+
+// import { useEffect, useState } from 'react';
+// import { useRouter } from 'next/navigation';
+// import { Button, Input, Alert, Card } from '@/components/ui';
+// import { relayLogin, makeExtensionConnectUrl } from '@/lib/api';
+
+// export default function RecipientPage() {
+//   const router = useRouter();
+//   const [shareToken, setShareToken] = useState('');
+//   const [loading, setLoading] = useState(false);
+//   const [error, setError] = useState<string | null>(null);
+//   const [handoffUrl, setHandoffUrl] = useState<string | null>(null);
+//   const [serviceUrl, setServiceUrl] = useState<string | null>(null);
+//   const [activeTab, setActiveTab] = useState<'direct' | 'keycloak'>('direct');
+
+//   // ✅ Authentication guard
+//   useEffect(() => {
+//     const token = localStorage.getItem('jwt_token') || localStorage.getItem('zkp_token');
+//     if (!token) {
+//       router.push('/');
+//     }
+//   }, [router]);
+
+//   const handleRelayLogin = async () => {
+//     if (!shareToken.trim()) {
+//       setError('Please enter a share token');
+//       return;
+//     }
+//     setLoading(true);
+//     setError(null);
+//     setHandoffUrl(null);
+//     try {
+//       const result = await relayLogin(shareToken);
+//       if (result.handoff?.session_id) {
+//         const handoffApiUrl = `${process.env.NEXT_PUBLIC_API_URL}/sharing/handoff/${result.handoff.session_id}`;
+//         const connectUrl = makeExtensionConnectUrl(handoffApiUrl);
+//         setHandoffUrl(connectUrl);
+//         setServiceUrl(result.service_url);
+//       } else {
+//         setError('Relay login failed: no handoff session created');
+//       }
+//     } catch (err: any) {
+//       setError(err.message || 'Relay login failed');
+//     } finally {
+//       setLoading(false);
+//     }
+//   };
+
+//   const handleKeycloakFlow = async () => {
+//     setError('Keycloak flow not yet implemented');
+//   };
+
+//   return (
+//     <div className="min-h-screen bg-void bg-grid flex items-center justify-center p-4">
+//       <div className="w-full max-w-md bg-panel border border-border rounded-2xl p-6">
+//         <h1 className="text-2xl font-bold mb-2">Recipient Access</h1>
+//         <p className="text-muted text-sm mb-6">Complete your secure session handoff</p>
+
+//         <div className="flex border-b border-border mb-4">
+//           <button
+//             className={`flex-1 py-2 text-sm font-mono ${activeTab === 'direct' ? 'text-accent border-b-2 border-accent' : 'text-muted'}`}
+//             onClick={() => { setActiveTab('direct'); setError(null); setHandoffUrl(null); }}
+//           >
+//             Direct Handoff
+//           </button>
+//           <button
+//             className={`flex-1 py-2 text-sm font-mono ${activeTab === 'keycloak' ? 'text-accent border-b-2 border-accent' : 'text-muted'}`}
+//             onClick={() => { setActiveTab('keycloak'); setError(null); setHandoffUrl(null); }}
+//           >
+//             Keycloak Flow
+//           </button>
+//         </div>
+
+//         {activeTab === 'direct' && (
+//           <div className="space-y-4">
+//             <Input
+//               label="Share token"
+//               value={shareToken}
+//               onChange={(e) => setShareToken(e.target.value)}
+//               placeholder="Provided by the credential owner"
+//               hint="The one‑time token you received"
+//             />
+//             <Button onClick={handleRelayLogin} loading={loading} variant="primary" className="w-full">
+//               Login via Relay
+//             </Button>
+//             {error && <Alert type="error">{error}</Alert>}
+//             {handoffUrl && (
+//               <Card className="mt-4 p-3 border-accent/30 bg-accent/5">
+//                 <p className="text-sm font-mono text-accent mb-2">Handoff session ready</p>
+//                 <p className="text-xs text-muted mb-1">Service: {serviceUrl}</p>
+//                 <a
+//                   href={handoffUrl}
+//                   target="_blank"
+//                   rel="noopener noreferrer"
+//                   className="inline-block w-full text-center bg-accent/10 hover:bg-accent/20 border border-accent/30 rounded-md py-2 text-sm font-mono transition-colors"
+//                 >
+//                   🔓 Open connected profile
+//                 </a>
+//                 <p className="text-xs text-muted mt-2">
+//                   Requires the ZKP extension (installed and enabled).
+//                 </p>
+//               </Card>
+//             )}
+//           </div>
+//         )}
+
+//         {activeTab === 'keycloak' && (
+//           <div className="space-y-4">
+//             <p className="text-sm text-muted">Keycloak flow is not yet implemented.</p>
+//             <Button onClick={handleKeycloakFlow} variant="secondary" className="w-full">
+//               Poll for token
+//             </Button>
+//           </div>
+//         )}
+
+//         <div className="mt-6 text-center text-xs text-muted">
+//           <a href="/" className="text-accent hover:underline">← Back to login</a>
+//         </div>
+//       </div>
+//     </div>
+//   );
+// }
 
 
 
